@@ -1,0 +1,5 @@
+.env
+fca.db
+venv/
+__pycache__/
+*.pyc
