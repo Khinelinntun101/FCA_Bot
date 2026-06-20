@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 
 # Load environment variables
 load_dotenv()
-TOKEN = os.getenv("8649647642:AAEH4MjbalslDUWdH6aTnhG84yIl_VHa4Hs")
+TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 7242601708
 
 # Session and Progress trackers
