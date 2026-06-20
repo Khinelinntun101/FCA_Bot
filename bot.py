@@ -1,8 +1,10 @@
 import os
 import sqlite3
 import json
+import random
 from dotenv import load_dotenv
 from telegram import Update
+from telegram.ext import CommandHandler
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 # Load environment variables
@@ -14,6 +16,7 @@ ADMIN_ID = 7242601708
 user_sessions = {}
 user_profile_progress = {}
 user_profile_data = {}
+user_profile_photo = {}
 
 # Profile fields (မြန်မာဘာသာ label တွေ)
 profile_steps = [
@@ -30,8 +33,8 @@ profile_steps = [
     "FCA စတင်ဝင်ရောက်သည့်ရက်စွဲ",
     "အကျိုးခံစားခွင့်ရှိသူ အမည်",
     "တော်စပ်ပုံ (ဆက်သွယ်မှု)",
-    "အကျိုးခံစားခွင့်ရှိသူ ဖုန်းနံပါတ်",
-    "အကျိုးခံစားခွင့်ရှိသူ လိပ်စာ"
+    "အမွှေစားအမွှေခံခွင့်ရှိသူ၏ ဖုန်းနံပါတ်",
+    "အမွှေစားအမွှေခံခွင့်ရှိသူ၏ လိပ်စာ"
 ]
 
 # ─── Database Setup ───────────────────────────────────────────
@@ -81,9 +84,17 @@ def is_admin(user_id):
 
 
 def generate_member_id():
-    cur.execute("SELECT COUNT(*) FROM members")
-    count = cur.fetchone()[0] + 1          # ✅ Bug 1 fix
-    return f"FCA-{count:04d}"
+    while True:
+        number = random.randint(10000, 99999)
+        member_id = f"FCA-{number}"
+
+        cur.execute(
+            "SELECT member_id FROM members WHERE member_id=?",
+            (member_id,)
+        )
+
+        if not cur.fetchone():
+            return member_id
 
 
 # ─── /start ──────────────────────────────────────────────────
@@ -216,7 +227,8 @@ async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    user_sessions[update.effective_user.id] = member_id
+        user_sessions[update.effective_user.id] = member_id
+        user_profile_photo[update.effective_user.id] = None
 
     await update.message.reply_text(
         f"✅ Login အောင်မြင်ပါသည်\n\n"
@@ -235,12 +247,17 @@ async def start_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_profile_progress[user_id] = 0
     user_profile_data[user_id] = {}
+    user_waiting_photo = {}
+
+    user_waiting_photo[user_id] = True
 
     await update.message.reply_text(
-        f"📋 Profile Registration စတင်သည်\n"
-        f"မေးခွန်း {len(profile_steps)} ခု ဖြေရမည်\n\n"
-        f"1️⃣ {profile_steps[0]} ကို ရိုက်ထည့်ပေးပါ"   # ✅ Bug 5 fix
-    )
+    "📸 FCA Membership Registration\n\n"
+    "အရင်ဆုံး သင့်၏ ကိုယ်ရေးပုံ (Profile Photo) ကို ပို့ပေးပါ။\n\n"
+    "ဓာတ်ပုံပြီးပါက အောက်ပါ ကိုယ်ရေးအချက်အလက်များကို ဖြည့်သွင်းရပါမည်။\n"
+    "သင်ဖြည့်သွင်းသော အချက်အလက်များကို FCA အဖွဲ့၏ အကျိုးခံစားခွင့်များနှင့် အခွင့်အရေးများ စိစစ်ရာတွင် အသုံးပြုပါမည်။\n\n"
+    "အချက်အလက်များကို မှန်ကန်စွာ ဖြည့်သွင်းပေးပါ။"
+)
 
 
 # ─── Profile Message Handler ──────────────────────────────────
