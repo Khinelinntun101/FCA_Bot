@@ -1,62 +1,48 @@
 import os
 import sqlite3
-import json
 import random
 from dotenv import load_dotenv
+
 from telegram import Update
-from telegram.ext import CommandHandler
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
+)
 
-# Load environment variables
+# =========================
+# ENV
+# =========================
 load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 7242601708
 
-# Session and Progress trackers
-user_sessions = {}
-user_profile_progress = {}
-user_profile_data = {}
-user_profile_photo = {}
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7242601708"))
 
-# Profile fields (မြန်မာဘာသာ label တွေ)
-profile_steps = [
-    "အမည်",
-    "ဖခင်အမည်",
-    "မိခင်အမည်",
-    "မှတ်ပုံတင်အမှတ်",
-    "ဖုန်းနံပါတ်",
-    "လက်ရှိနေရပ်လိပ်စာ",
-    "အမြဲတမ်းနေရပ်လိပ်စာ",
-    "အလုပ်အကိုင်",
-    "ဌာန",
-    "ရာထူး",
-    "FCA စတင်ဝင်ရောက်သည့်ရက်စွဲ",
-    "အကျိုးခံစားခွင့်ရှိသူ အမည်",
-    "တော်စပ်ပုံ (ဆက်သွယ်မှု)",
-    "အမွေစားအမွေခံခွင့်ရှိသူ၏ ဖုန်းနံပါတ်",
-    "အမွေစားအမွေခံခွင့်ရှိသူ၏ လိပ်စာ"
-]
-
-# ─── Database Setup ───────────────────────────────────────────
+# =========================
+# DATABASE
+# =========================
 conn = sqlite3.connect("fca.db", check_same_thread=False)
 cur = conn.cursor()
 
-# Members table
+# Members Table
 cur.execute("""
 CREATE TABLE IF NOT EXISTS members (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    member_id TEXT UNIQUE,
+    member_id TEXT PRIMARY KEY,
     username TEXT UNIQUE,
     password TEXT,
     telegram_id INTEGER,
-    approved INTEGER DEFAULT 0
+    approved INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
 
-# Profiles table (proper columns)
+# Profiles Table (confirmed column ကိုပါ ထည့်သွင်းတည်ဆောက်ထားသည်)
 cur.execute("""
 CREATE TABLE IF NOT EXISTS profiles (
     member_id TEXT PRIMARY KEY,
+    photo_id TEXT,
     full_name TEXT,
     father_name TEXT,
     mother_name TEXT,
@@ -72,296 +58,483 @@ CREATE TABLE IF NOT EXISTS profiles (
     beneficiary_relationship TEXT,
     beneficiary_phone TEXT,
     beneficiary_address TEXT,
-    created_at TEXT DEFAULT (datetime('now','localtime'))
+    confirmed INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
+
+# Settings Table
+cur.execute("""
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+)
+""")
+
 conn.commit()
 
+# =========================
+# MEMORY
+# =========================
+user_sessions = {}
+user_profile_progress = {}
+user_profile_data = {}
+user_waiting_photo = {}
 
-# ─── Helper Functions ─────────────────────────────────────────
+# =========================
+# PROFILE STEPS & LABELS
+# =========================
+profile_steps = [
+    "full_name", "father_name", "mother_name", "nrc", "phone",
+    "current_address", "permanent_address", "occupation", "department",
+    "position", "join_date", "beneficiary_name", "beneficiary_relationship",
+    "beneficiary_phone", "beneficiary_address"
+]
+
+profile_labels = {
+    "full_name": "အမည်",
+    "father_name": "ဖခင်အမည်",
+    "mother_name": "မိခင်အမည်",
+    "nrc": "မှတ်ပုံတင်အမှတ်",
+    "phone": "ဖုန်းနံပါတ်",
+    "current_address": "လက်ရှိနေရပ်လိပ်စာ",
+    "permanent_address": "အမြဲတမ်းနေရပ်လိပ်စာ",
+    "occupation": "အလုပ်အကိုင်",
+    "department": "ဌာန",
+    "position": "ရာထူး",
+    "join_date": "FCA စတင်ဝင်ရောက်သည့်ရက်စွဲ",
+    "beneficiary_name": "အကျိုးခံစားခွင့်ရှိသူ အမည်",
+    "beneficiary_relationship": "တော်စပ်ပုံ",
+    "beneficiary_phone": "အကျိုးခံစားခွင့်ရှိသူ ဖုန်း",
+    "beneficiary_address": "အကျိုးခံစားခွင့်ရှိသူ လိပ်စာ"
+}
+
+# =========================
+# HELPERS
+# =========================
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-
 def generate_member_id():
     while True:
-        number = random.randint(10000, 99999)
-        member_id = f"FCA-{number}"
-
-        cur.execute(
-            "SELECT member_id FROM members WHERE member_id=?",
-            (member_id,)
-        )
-
+        member_id = f"FCA-{random.randint(10000, 99999)}"
+        cur.execute("SELECT member_id FROM members WHERE member_id=?", (member_id,))
         if not cur.fetchone():
             return member_id
 
-
-# ─── /start ──────────────────────────────────────────────────
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if is_admin(update.effective_user.id):
-        await update.message.reply_text(
-            "🔐 FCA Admin Panel\n\n"
-            "/addmember username password — Member ဖန်တီးရန်\n"
-            "/approve FCA-0001 — Member Approve လုပ်ရန်\n"
-            "/members — Member စာရင်းကြည့်ရန်"
-        )
-    else:
-        await update.message.reply_text(
-            "🏢 FCA Membership Bot မှ ကြိုဆိုပါတယ်။\n\n"
-            "/login username password ဖြင့် Login ဝင်ပါ။"
-        )
-
-
-# ─── /addmember ──────────────────────────────────────────────
-async def addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin သာ အသုံးပြုနိုင်သည်")
-        return
-
-    if len(context.args) != 2:
-        await update.message.reply_text(
-            "အသုံးပြုပုံ:\n/addmember username password"
-        )
-        return
-
-    username = context.args[0]             # ✅ Bug 2 fix
-    password = context.args[1]             # ✅ Bug 2 fix
-    member_id = generate_member_id()
-
-    try:
-        cur.execute(
-            "INSERT INTO members (member_id, username, password, telegram_id) VALUES (?, ?, ?, ?)",
-            (member_id, username, password, 0)
-        )
-        conn.commit()
-        await update.message.reply_text(
-            f"✅ Member ဖန်တီးပြီးပါပြီ\n\n"
-            f"🆔 ID: {member_id}\n"
-            f"👤 Username: {username}\n"
-            f"🔑 Password: {password}\n\n"
-            f"⏳ Approve လုပ်ရန်: /approve {member_id}"
-        )
-    except sqlite3.IntegrityError:
-        await update.message.reply_text(f"❌ '{username}' သည် ရှိပြီးသား Username ဖြစ်သည်")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
-
-
-# ─── /approve ────────────────────────────────────────────────
-async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin သာ အသုံးပြုနိုင်သည်")
-        return
-
-    if len(context.args) != 1:
-        await update.message.reply_text(
-            "အသုံးပြုပုံ:\n/approve FCA-0001"
-        )
-        return
-
-    member_id = context.args[0]            # ✅ Bug 3 fix
-
-    # Member ရှိမရှိ စစ်ဆေး
-    cur.execute("SELECT member_id FROM members WHERE member_id=?", (member_id,))
-    found = cur.fetchone()
-
-    if not found:
-        await update.message.reply_text(f"❌ {member_id} မတွေ့ပါ")
-        return
-
-    cur.execute("UPDATE members SET approved=1 WHERE member_id=?", (member_id,))
-    conn.commit()
-
-    await update.message.reply_text(f"✅ {member_id} ကို Approve လုပ်ပြီးပါပြီ")
-
-
-# ─── /members ────────────────────────────────────────────────
-async def members(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin သာ အသုံးပြုနိုင်သည်")
-        return
-
-    cur.execute("SELECT member_id, username, approved FROM members")
-    rows = cur.fetchall()
-
-    if not rows:
-        await update.message.reply_text("Member မရှိသေးပါ")
-        return
-
-    text = "📋 Member List\n\n"
-    for row in rows:
-        status = "✅" if row[2] == 1 else "⏳"   # ✅ Bug 4 fix
-        text += f"{row[0]} | {row[1]} | {status}\n"
-
-    await update.message.reply_text(text)
-
-
-# ─── /login ──────────────────────────────────────────────────
-async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 2:
-        await update.message.reply_text(
-            "အသုံးပြုပုံ:\n/login username password"
-        )
-        return
-
-    username = context.args[0]
-    password = context.args[1]
-
+def get_member(username, password):
     cur.execute(
         "SELECT member_id, approved FROM members WHERE username=? AND password=?",
         (username, password)
     )
-    data = cur.fetchone()
+    return cur.fetchone()
+
+def is_logged_in(user_id):
+    return user_id in user_sessions
+
+# =========================
+# COMMAND HANDLERS
+# =========================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_admin(update.effective_user.id):
+        await update.message.reply_text(
+            "🔐 FCA Admin Panel\n\n"
+            "/addmember username password\n"
+            "/approve FCA-12345\n"
+            "/members — စာရင်းကြည့်ရန်\n"
+            "/viewmember FCA-12345 — Profile ကြည့်ရန်\n"
+            "/setfund 500000 — ရန်ပုံငွေသတ်မှတ်ရန်\n"
+            "/broadcast စာသား — အသိပေးချက်ပို့ရန်\n"
+            "/confirm FCA-12345 — Profile အတည်ပြုရန်\n"
+            "/deletemember MEMBER_ID\n"
+            "/stats"
+        )
+        return
+
+    await update.message.reply_text(
+        "🏢 FCA Membership Bot မှ ကြိုဆိုပါတယ်။\n\n"
+        "Login ဝင်ရန်\n"
+        "/login username password"
+    )
+
+async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 2:
+        await update.message.reply_text("အသုံးပြုပုံ - /login username password")
+        return
+
+    username, password = context.args, context.args
+    data = get_member(username, password)
 
     if not data:
         await update.message.reply_text("❌ Username သို့ Password မှားနေပါသည်")
         return
 
     member_id, approved = data
-
     if approved == 0:
-        await update.message.reply_text(
-            "⏳ Admin approval မရသေးပါ\n"
-            "Admin မှ Approve ပြီးမှ Login ဝင်နိုင်မည်"
-        )
+        await update.message.reply_text("⏳ Admin Approval မရသေးပါ")
         return
 
-        user_sessions[update.effective_user.id] = member_id
-        user_profile_photo[update.effective_user.id] = None
+    user_id = update.effective_user.id
+    user_sessions[user_id] = member_id
+
+    cur.execute(
+        "UPDATE members SET telegram_id=? WHERE member_id=?",
+        (user_id, member_id)
+    )
+    conn.commit()
 
     await update.message.reply_text(
-        f"✅ Login အောင်မြင်ပါသည်\n\n"
-        f"🆔 Member ID: {member_id}\n\n"
-        f"Profile ဖြည့်ရန် /profile နှိပ်ပါ"
+        f"✅ Login အောင်မြင်ပါသည်\n\n🆔 Member ID : {member_id}\n\n/profile ကိုနှိပ်ပြီး Profile ဖြည့်နိုင်ပါသည်"
     )
 
-
-# ─── /profile ────────────────────────────────────────────────
-async def start_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if not is_logged_in(user_id):
+        await update.message.reply_text("❌ Login မဝင်ရသေးပါ")
+        return
 
-    if user_id not in user_sessions:
+    del user_sessions[user_id]
+    await update.message.reply_text("✅ Logout ပြီးပါပြီ")
+
+async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_logged_in(user_id):
         await update.message.reply_text("❌ အရင်ဆုံး /login ဝင်ပါ")
         return
 
-    user_profile_progress[user_id] = 0
+    user_profile_progress[user_id] = -1
     user_profile_data[user_id] = {}
-    user_waiting_photo = {}
-
     user_waiting_photo[user_id] = True
 
-    await update.message.reply_text(
-    "📸 FCA Membership Registration\n\n"
-    "အရင်ဆုံး သင့်၏ ကိုယ်ရေးပုံ (Profile Photo) ကို ပို့ပေးပါ။\n\n"
-    "ဓာတ်ပုံပြီးပါက အောက်ပါ ကိုယ်ရေးအချက်အလက်များကို ဖြည့်သွင်းရပါမည်။\n"
-    "သင်ဖြည့်သွင်းသော အချက်အလက်များကို FCA အဖွဲ့၏ အကျိုးခံစားခွင့်များနှင့် အခွင့်အရေးများ စိစစ်ရာတွင် အသုံးပြုပါမည်။\n\n"
-    "အချက်အလက်များကို မှန်ကန်စွာ ဖြည့်သွင်းပေးပါ။"
-)
+    await update.message.reply_text("📸 Profile Photo (ဓာတ်ပုံ) ပို့ပေးပါ။")
 
+# =========================
+# PHOTO & TEXT HANDLERS
+# =========================
 
-# ─── Profile Message Handler ──────────────────────────────────
-async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
-    if approved == 0:
-    await update.message.reply_text(
-        "⛔ Admin approval မရသေးပါ\n"
-        "Admin မှ Approve ပြီးမှ Login ဝင်နိုင်မည်"
-    )
-    return
-
-user_sessions[update.effective_user.id] = member_id
-user_profile_photo[update.effective_user.id] = None
-
-await update.message.reply_text(
-    f"✅ Login အောင်မြင်ပါသည်\n\n"
-    f"🆔 Member ID: {member_id}\n\n"
-    f"Profile ဖြည့်ရန် /profile နှိပ်ပါ"
-)
-
-    step = user_profile_progress[user_id]
-    current_field = profile_steps[step]
-
-    # လက်ရှိ field သိမ်း
-    user_profile_data[user_id][current_field] = update.message.text
-    user_profile_progress[user_id] += 1
-
-    # အားလုံးပြည့်ပြီ
-    if user_profile_progress[user_id] >= len(profile_steps):
-        member_id = user_sessions.get(user_id)
-        d = user_profile_data[user_id]
-
-        try:
-            # ✅ Bug 6 fix — DB ထဲ သိမ်းသည်
-            cur.execute("""
-                INSERT OR REPLACE INTO profiles (
-                    member_id, full_name, father_name, mother_name,
-                    nrc, phone, current_address, permanent_address,
-                    occupation, department, position, join_date,
-                    beneficiary_name, beneficiary_relationship,
-                    beneficiary_phone, beneficiary_address
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                member_id,
-                d.get("အမည်", ""),
-                d.get("ဖခင်အမည်", ""),
-                d.get("မိခင်အမည်", ""),
-                d.get("မှတ်ပုံတင်အမှတ်", ""),
-                d.get("ဖုန်းနံပါတ်", ""),
-                d.get("လက်ရှိနေရပ်လိပ်စာ", ""),
-                d.get("အမြဲတမ်းနေရပ်လိပ်စာ", ""),
-                d.get("အလုပ်အကိုင်", ""),
-                d.get("ဌာန", ""),
-                d.get("ရာထူး", ""),
-                d.get("FCA စတင်ဝင်ရောက်သည့်ရက်စွဲ", ""),
-                d.get("အကျိုးခံစားခွင့်ရှိသူ အမည်", ""),
-                d.get("တော်စပ်ပုံ (ဆက်သွယ်မှု)", ""),
-                d.get("အကျိုးခံစားခွင့်ရှိသူ ဖုန်းနံပါတ်", ""),
-                d.get("အကျိုးခံစားခွင့်ရှိသူ လိပ်စာ", "")
-            ))
-            conn.commit()
-
-            await update.message.reply_text(
-                "✅ Profile Registration ပြီးဆုံးပါပြီ\n\n"
-                f"🆔 Member ID: {member_id}\n"
-                f"👤 အမည်: {d.get('အမည်', '')}\n"
-                f"📞 ဖုန်း: {d.get('ဖုန်းနံပါတ်', '')}\n\n"
-                "ကျေးဇူးတင်ပါသည် 🙏"
-            )
-        except Exception as e:
-            await update.message.reply_text(f"❌ သိမ်းဆည်းရာတွင် Error ဖြစ်ပါသည်: {e}")
-
-        # Memory clear
-        del user_profile_progress[user_id]
-        del user_profile_data[user_id]
+    if user_id not in user_waiting_photo:
         return
 
-    # နောက် question မေးသည်
-    next_step = user_profile_progress[user_id]
-    next_field = profile_steps[next_step]
+    photo = update.message.photo[-1]
+    file_id = photo.file_id
+    
+    user_profile_data[user_id]["photo_id"] = file_id
+
+    os.makedirs("photos", exist_ok=True)
+    file = await context.bot.get_file(file_id)
+    await file.download_to_drive(f"photos/{user_id}.jpg")
+
+    del user_waiting_photo[user_id]
+    user_profile_progress[user_id] = 0
+    first_field = profile_steps
+
     await update.message.reply_text(
-        f"{next_step + 1}️⃣ {next_field} ကို ရိုက်ထည့်ပေးပါ"
+        f"✅ ဓာတ်ပုံလက်ခံရရှိပါပြီ။\n\n1️⃣ {profile_labels[first_field]} ကို ထည့်သွင်းပေးပါ။"
     )
 
+async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in user_profile_progress:
+        return
 
-# ─── Main ─────────────────────────────────────────────────────
+    step = user_profile_progress[user_id]
+    if step < 0:
+        return
+
+    current_field = profile_steps[step]
+    user_profile_data[user_id][current_field] = update.message.text
+
+    step += 1
+    user_profile_progress[user_id] = step
+
+    if step < len(profile_steps):
+        next_field = profile_steps[step]
+        await update.message.reply_text(f"{step+1}️⃣ {profile_labels[next_field]} ကို ထည့်သွင်းပေးပါ။")
+    else:
+        await save_profile(user_id)
+        member_id = user_sessions[user_id]
+        await update.message.reply_text(
+            f"🎉 FCA Membership Profile ဖြည့်စွက်ခြင်း အောင်မြင်စွာ ပြီးဆုံးပါပြီ။\n\n🆔 {member_id}"
+        )
+        user_profile_progress.pop(user_id, None)
+        user_profile_data.pop(user_id, None)
+
+async def save_profile(user_id):
+    member_id = user_sessions[user_id]
+    d = user_profile_data[user_id]
+
+    cur.execute("""
+        INSERT OR REPLACE INTO profiles (
+            member_id, photo_id, full_name, father_name, mother_name, nrc, phone,
+            current_address, permanent_address, occupation, department, position,
+            join_date, beneficiary_name, beneficiary_relationship, beneficiary_phone, beneficiary_address, confirmed
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+    """, (
+        member_id, d.get("photo_id", ""), d.get("full_name", ""), d.get("father_name", ""),
+        d.get("mother_name", ""), d.get("nrc", ""), d.get("phone", ""), d.get("current_address", ""),
+        d.get("permanent_address", ""), d.get("occupation", ""), d.get("department", ""),
+        d.get("position", ""), d.get("join_date", ""), d.get("beneficiary_name", ""),
+        d.get("beneficiary_relationship", ""), d.get("beneficiary_phone", ""), d.get("beneficiary_address", "")
+    ))
+    conn.commit()
+
+# =========================
+# USER COMMANDS
+# =========================
+
+async def me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_logged_in(user_id):
+        await update.message.reply_text("❌ အရင်ဆုံး /login ဝင်ပါ")
+        return
+
+    member_id = user_sessions[user_id]
+    cur.execute("SELECT full_name, phone, position FROM profiles WHERE member_id=?", (member_id,))
+    data = cur.fetchone()
+
+    if not data:
+        await update.message.reply_text("❌ Profile မဖြည့်ရသေးပါ")
+        return
+
+    await update.message.reply_text(f"👤 အမည်: {data}\n📞 ဖုန်း: {data}\n🏅 ရာထူး: {data}")
+
+async def myprofile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_logged_in(user_id):
+        await update.message.reply_text("❌ အရင်ဆုံး /login ဝင်ပါ")
+        return
+
+    member_id = user_sessions[user_id]
+    cur.execute("SELECT * FROM profiles WHERE member_id=?", (member_id,))
+    row = cur.fetchone()
+
+    if not row:
+        await update.message.reply_text("❌ Profile မရှိသေးပါ")
+        return
+
+    status = "✅ Confirmed" if row == 1 else "⏳ Waiting Confirmation"
+
+    msg = f"""
+🆔 ID: {row} [Status: {status}]
+👤 အမည်: {row}
+👨 အဖအမည်: {row}
+👩 အမိအမည်: {row}
+🪪 မှတ်ပုံတင်: {row}
+📞 ဖုန်း: {row}
+🏠 လက်ရှိလိပ်စာ: {row}
+🏡 အမြဲတမ်းလိပ်စာ: {row}
+💼 အလုပ်အကိုင်: {row}
+🏢 ဌာန: {row}
+🏅 ရာထူး: {row}
+📅 FCA ဝင်ရောက်သည့်နေ့: {row}
+
+👨‍👩‍👧 အကျိုးခံစားခွင့်ရှိသူ
+👤 အမည်: {row}
+🔗 တော်စပ်ပုံ: {row}
+📞 ဖုန်း: {row}
+🏠 လိပ်စာ: {row}
+"""
+    if row:  # Photo ID ရှိလျှင် ပုံပါတွဲပို့ပေးမည်
+        await update.message.reply_photo(photo=row, caption=msg)
+    else:
+        await update.message.reply_text(msg)
+
+async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cur.execute("SELECT value FROM settings WHERE key='fund'")
+    row = cur.fetchone()
+    amount = row if row else "0"
+    await update.message.reply_text(f"💰 FCA Fund\n\n{amount} MMK")
+
+# =========================
+# ADMIN COMMANDS (တောင်းဆိုထားသော Function များ ဖြည့်စွက်ထားသည်)
+# =========================
+
+async def addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args) != 2:
+        await update.message.reply_text("အသုံးပြုပုံ - /addmember username password")
+        return
+    
+    username, password = context.args, context.args
+    member_id = generate_member_id()
+    
+    try:
+        cur.execute(
+            "INSERT INTO members (member_id, username, password, approved) VALUES (?, ?, ?, 0)",
+            (member_id, username, password)
+        )
+        conn.commit()
+        await update.message.reply_text(f"✅ Member ကို စာရင်းသွင်းပြီးပါပြီ။\n🆔 ID: {member_id}\n👤 User: {username}\n(မှတ်ချက် - /approve ဖြင့် approval ပေးရန် လိုအပ်ပါသည်)")
+    except sqlite3.IntegrityError:
+        await update.message.reply_text("❌ ဒီ Username က ရှိပြီးသားဖြစ်နေပါသည်။")
+
+async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args) != 1:
+        await update.message.reply_text("အသုံးပြုပုံ - /approve MEMBER_ID")
+        return
+    
+    member_id = context.args
+    cur.execute("UPDATE members SET approved=1 WHERE member_id=?", (member_id,))
+    conn.commit()
+    await update.message.reply_text(f"✅ {member_id} အား Login ဝင်ခွင့် ပြုလိုက်ပါပြီ (Approved)။")
+
+async def members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    cur.execute("SELECT member_id, username, approved FROM members")
+    rows = cur.fetchall()
+    
+    if not rows:
+        await update.message.reply_text("အဖွဲ့ဝင် မရှိသေးပါ။")
+        return
+        
+    msg = "👥 FCA Members List:\n\n"
+    for row in rows:
+        status = "Approved" if row == 1 else "Pending"
+        msg += f"🆔 {row} | 👤 {row} | [{status}]\n"
+    await update.message.reply_text(msg)
+
+# အသစ်ထည့်ထားသော FUNCTION: /viewmember MEMBER_ID
+async def viewmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args) != 1:
+        await update.message.reply_text("အသုံးပြုပုံ - /viewmember MEMBER_ID")
+        return
+
+    member_id = context.args
+    cur.execute("SELECT * FROM profiles WHERE member_id=?", (member_id,))
+    row = cur.fetchone()
+
+    if not row:
+        await update.message.reply_text(f"❌ {member_id} ၏ Profile စာရင်း မရှိသေးပါ။")
+        return
+
+    status = "Confirmed" if row == 1 else "Waiting Confirm"
+    msg = f"📋 Member Profile ({member_id})\nStatus: {status}\n\n" \
+          f"👤 အမည်: {row}\n👨 အဖအမည်: {row}\n👩 အမိအမည်: {row}\n" \
+          f"🪪 မှတ်ပုံတင်: {row}\n📞 ဖုန်း: {row}\n🏠 လိပ်စာ: {row}\n" \
+          f"💼 ရာထူး: {row}\n📅 ဝင်ရောက်သည့်ရက်: {row}"
+
+    if row:
+        await update.message.reply_photo(photo=row, caption=msg)
+    else:
+        await update.message.reply_text(msg)
+
+# အသစ်ထည့်ထားသော FUNCTION: /confirm MEMBER_ID
+async def confirm_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args) != 1:
+        await update.message.reply_text("အသုံးပြုပုံ - /confirm MEMBER_ID")
+        return
+
+    member_id = context.args
+    cur.execute("UPDATE profiles SET confirmed=1 WHERE member_id=?", (member_id,))
+    conn.commit()
+    
+    # သက်ဆိုင်ရာ Member ရဲ့ Telegram ID ကိုရှာပြီး အကြောင်းကြားစာပို့ပေးခြင်း
+    cur.execute("SELECT telegram_id FROM members WHERE member_id=?", (member_id,))
+    user_row = cur.fetchone()
+    if user_row and user_row:
+        try:
+            await context.bot.send_message(chat_id=user_row, text="🎉 သင်၏ Profile ကို Admin မှ အတည်ပြု (Confirm) ပေးလိုက်ပါပြီ။")
+        except Exception:
+            pass
+
+    await update.message.reply_text(f"✅ {member_id} ၏ Profile ကို Confirm လုပ်ပြီးပါပြီ။")
+
+# အသစ်ထည့်ထားသော FUNCTION: /broadcast စာသား
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        await update.message.reply_text("အသုံးပြုပုံ - /broadcast သင်ပြောချင်သောစာသား")
+        return
+
+    text_to_send = "📢 **FCA Admin အသိပေးချက်**\n\n" + " ".join(context.args)
+    cur.execute("SELECT telegram_id FROM members WHERE telegram_id IS NOT NULL")
+    users = cur.fetchall()
+
+    success_count = 0
+    for user in users:
+        try:
+            await context.bot.send_message(chat_id=user, text=text_to_send, parse_mode="Markdown")
+            success_count += 1
+        except Exception:
+            continue
+
+    await update.message.reply_text(f"📢 Broadcast ပြီးပါပြီ။ အဖွဲ့ဝင် {success_count} ဦးထံ ပေးပို့အောင်မြင်သည်။")
+
+async def setfund(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args) != 1:
+        await update.message.reply_text("/setfund amount")
+        return
+
+    amount = context.args
+    cur.execute("INSERT OR REPLACE INTO settings VALUES('fund',?)", (amount,))
+    conn.commit()
+    await update.message.reply_text(f"✅ Fund Updated\n{amount} MMK")
+
+async def deletemember(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args) != 1:
+        await update.message.reply_text("/deletemember MEMBER_ID")
+        return
+
+    member_id = context.args
+    cur.execute("DELETE FROM members WHERE member_id=?", (member_id,))
+    cur.execute("DELETE FROM profiles WHERE member_id=?", (member_id,))
+    conn.commit()
+    await update.message.reply_text("🗑 Member Deleted")
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cur.execute("SELECT COUNT(*) FROM members")
+    members_count = cur.fetchone()
+
+    cur.execute("SELECT value FROM settings WHERE key='fund'")
+    row = cur.fetchone()
+    fund_amount = row if row else "0"
+
+    await update.message.reply_text(f"📊 FCA Statistics\n\n👥 Members : {members_count}\n💰 Fund : {fund_amount} MMK")
+
+# =========================
+# APPLICATION SETUP
+# =========================
 def main():
-    app = Application.builder().token(TOKEN).build()
+    if not BOT_TOKEN:
+        print("Error: BOT_TOKEN is missing in .env file")
+        return
 
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    # Register Handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("login", login))
+    app.add_handler(CommandHandler("logout", logout))
+    app.add_handler(CommandHandler("profile", profile))
+    app.add_handler(CommandHandler("me", me))
+    app.add_handler(CommandHandler("myprofile", myprofile))
+    app.add_handler(CommandHandler("fund", fund))
+    
+    # Admin Handlers
     app.add_handler(CommandHandler("addmember", addmember))
     app.add_handler(CommandHandler("approve", approve))
     app.add_handler(CommandHandler("members", members))
-    app.add_handler(CommandHandler("login", login))
-    app.add_handler(CommandHandler("profile", start_profile))
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, profile_handler)
-    )
+    app.add_handler(CommandHandler("viewmember", viewmember))     # <--- ဖြည့်စွက်ချက်
+    app.add_handler(CommandHandler("confirm", confirm_profile))   # <--- ဖြည့်စွက်ချက်
+    app.add_handler(CommandHandler("broadcast", broadcast))       # <--- ဖြည့်စွက်ချက်
+    app.add_handler(CommandHandler("setfund", setfund))
+    app.add_handler(CommandHandler("deletemember", deletemember))
+    app.add_handler(CommandHandler("stats", stats))
 
-    print("FCA Bot Running...")
+    # Message Handlers
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, profile_handler))
+
+    print("Bot is running...")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
