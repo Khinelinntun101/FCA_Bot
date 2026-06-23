@@ -33,8 +33,8 @@ profile_steps = [
     "FCA စတင်ဝင်ရောက်သည့်ရက်စွဲ",
     "အကျိုးခံစားခွင့်ရှိသူ အမည်",
     "တော်စပ်ပုံ (ဆက်သွယ်မှု)",
-    "အမွှေစားအမွှေခံခွင့်ရှိသူ၏ ဖုန်းနံပါတ်",
-    "အမွှေစားအမွှေခံခွင့်ရှိသူ၏ လိပ်စာ"
+    "အမွေစားအမွေခံခွင့်ရှိသူ၏ ဖုန်းနံပါတ်",
+    "အမွေစားအမွေခံခွင့်ရှိသူ၏ လိပ်စာ"
 ]
 
 # ─── Database Setup ───────────────────────────────────────────
@@ -264,8 +264,21 @@ async def start_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    if user_id not in user_profile_progress:
-        return
+    if approved == 0:
+    await update.message.reply_text(
+        "⛔ Admin approval မရသေးပါ\n"
+        "Admin မှ Approve ပြီးမှ Login ဝင်နိုင်မည်"
+    )
+    return
+
+user_sessions[update.effective_user.id] = member_id
+user_profile_photo[update.effective_user.id] = None
+
+await update.message.reply_text(
+    f"✅ Login အောင်မြင်ပါသည်\n\n"
+    f"🆔 Member ID: {member_id}\n\n"
+    f"Profile ဖြည့်ရန် /profile နှိပ်ပါ"
+)
 
     step = user_profile_progress[user_id]
     current_field = profile_steps[step]
