@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import random
 import string
 import logging
@@ -12,6 +11,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup
 )
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -22,12 +22,29 @@ from telegram.ext import (
     filters
 )
 
+# DATABASE FUNCTIONS
+from database import (
+    db_connect,
+    init_database,
+    get_member_by_telegram_id,
+    get_member_by_member_id,
+    get_member_by_search_keyword,
+    insert_member,
+    get_referrer_count,
+    get_total_payments,
+    get_total_funds_out,
+    insert_fund_transaction,
+    get_all_members_for_export
+)
+
+
 # =====================================================
 # CONFIG
 # =====================================================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7242601708"))
-DATABASE = "fca.db"
+
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -37,64 +54,8 @@ logging.basicConfig(
 # =====================================================
 # DATABASE INITIALIZATION
 # =====================================================
-def db_connect():
-    return sqlite3.connect(DATABASE)
 
-def init_database():
-    conn = db_connect()
-    cur = conn.cursor()
-
-    # Members Table
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS members (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        member_id TEXT UNIQUE,
-        telegram_id INTEGER UNIQUE,
-        name TEXT,
-        phone TEXT,
-        father_name TEXT,
-        mother_name TEXT,
-        nrc TEXT,
-        address TEXT,
-        job TEXT,
-        department TEXT,
-        join_date TEXT,
-        profile_photo_id TEXT,
-        status TEXT DEFAULT 'ACTIVE',
-        deposit_paid INTEGER DEFAULT 0,
-        referrer_id TEXT
-    )
-    """)
-
-    # Payments Table
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS payments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        member_id TEXT,
-        amount INTEGER,
-        payment_method TEXT,
-        provider TEXT,
-        payment_month TEXT,
-        payment_date TEXT,
-        proof_photo_id TEXT,
-        status TEXT DEFAULT 'PENDING',
-        approved_by TEXT
-    )
-    """)
-
-    # Funds / Expenses Table
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS funds (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        fund_type TEXT, -- 'IN' or 'OUT'
-        amount INTEGER,
-        description TEXT,
-        created_at TEXT
-    )
-    """)
-
-    conn.commit()
-    conn.close()
+    
 
 # =====================================================
 # UTILITIES
@@ -446,7 +407,7 @@ async def fund_out(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     try:
-        shutil.copy(DATABASE, "fca_backup.db")
+        shutil.copy("fca.db", "fca_backup.db")
         await update.message.reply_document(document=open("fca_backup.db", "rb"), filename=f"fca_backup_{datetime.now().strftime('%Y%m%d')}.db", caption="✅ လက်ရှိ Database အား Backup ထုတ်ယူပြီးပါပြီ။")
     except Exception as e:
         await update.message.reply_text(f"Backup Error: {str(e)}")
@@ -475,6 +436,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # =====================================================
 def main():
     init_database()
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     # Commands Base Handlers
@@ -483,7 +445,7 @@ def main():
     app.add_handler(CommandHandler("eligibility", eligibility))
     app.add_handler(CommandHandler("referral", referral_status))
     app.add_handler(CommandHandler("fundstatus", fund_status))
-    
+
     # Admin Handlers
     app.add_handler(CommandHandler("search_member", search_member))
     app.add_handler(CommandHandler("fund_in", fund_in))
