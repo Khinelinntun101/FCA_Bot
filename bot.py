@@ -21,13 +21,12 @@ from telegram.ext import (
     ConversationHandler,
     filters
 )
-from openpyxl import Workbook
 
 # =====================================================
 # CONFIG
 # =====================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
-ADMIN_IDS = [7242601708]  # Multiple Admins Support
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7242601708"))
 DATABASE = "fca.db"
 
 logging.basicConfig(
@@ -36,7 +35,7 @@ logging.basicConfig(
 )
 
 # =====================================================
-# DATABASE
+# DATABASE INITIALIZATION
 # =====================================================
 def db_connect():
     return sqlite3.connect(DATABASE)
@@ -73,7 +72,7 @@ def init_database():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         member_id TEXT,
         amount INTEGER,
-        payment_method TEXT, -- CASH or EMONEY
+        payment_method TEXT,
         provider TEXT,
         payment_month TEXT,
         payment_date TEXT,
@@ -83,40 +82,34 @@ def init_database():
     )
     """)
 
-    # Funds & Expenses Table
+    # Funds / Expenses Table
     cur.execute("""
     CREATE TABLE IF NOT EXISTS funds (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        fund_type TEXT, -- IN (Income) or OUT (Expense)
+        fund_type TEXT, -- 'IN' or 'OUT'
         amount INTEGER,
         description TEXT,
         created_at TEXT
     )
     """)
+
     conn.commit()
     conn.close()
 
 # =====================================================
-# UTILITIES & VALIDATION
+# UTILITIES
 # =====================================================
-def is_admin(user_id):
-    return user_id in ADMIN_IDS
-
-async def admin_only(update: Update):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin သာလျှင် အသုံးပြုနိုင်ပါသည်။")
-        return False
-    return True
-
 def generate_member_id():
     while True:
         code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
         member_id = "FCA-" + code
+        
         conn = db_connect()
         cur = conn.cursor()
         cur.execute("SELECT member_id FROM members WHERE member_id=?", (member_id,))
         result = cur.fetchone()
         conn.close()
+        
         if not result:
             return member_id
 
@@ -129,30 +122,58 @@ def calculate_months(join_date_str):
         return 0
 
 # =====================================================
-# KNOWLEDGE BASE DEFINITIONS
-# =====================================================
-FCA_RULES = {
-    "monthly_fee": "💰 FCA လစဉ်ထည့်ဝင်ကြေး\n\nတစ်လလျှင် 2,000 ကျပ် ဖြစ်ပါသည်။\n\nကြိုတင်ပေးသွင်းနိုင်သောကာလများ\n✅ 3 လစာ\n✅ 6 လစာ\n✅ 1 နှစ်စာ (24,000 ကျပ်)",
-    "deposit": "💰 Security Deposit\n\nအဖွဲ့စတင်ဝင်ရောက်ချိန်တွင် 5,000 ကျပ် တစ်ကြိမ်ပေးသွင်းရပါမည်။\n\nအဖွဲ့ဝင်သက်တမ်း 3 လပြည့်လျှင် ပြန်လည်ထုတ်ယူခွင့်ရှိပါသည်။",
-    "death_support": "🕊️ သေဆုံးမှုထောက်ပံ့ကြေး\n\nအဖွဲ့ဝင်သက်တမ်း 1 နှစ်ပြည့်ရပါမည်။\n\nတွက်ချက်ပုံ\nအဖွဲ့ဝင်တစ်ဦးစီ 1,000 ကျပ် + Total Fund ၏ 20% ဖြင့် တွက်ချက်ပါသည်။",
-    "referral": "🎁 Referral System\n\nMember အသစ် 5 ယောက်ကို အောင်မြင်စွာ မိတ်ဆက်ပေးပြီး ထိုသူများ 3 လဆက်တိုက် ကြေးမှန်မှန်ပေးပြီးပါက လစဉ်ကြေး 2,000 ကျပ် ကင်းလွတ်ခွင့် ရရှိနိုင်ပါသည်။"
-}
-
-FCA_KEYWORDS = ["fca", "အဖွဲ့", "ကြေး", "လစဉ်", "deposit", "စပေါ်", "သေဆုံး", "ထောက်ပံ့", "ရန်ပုံငွေ", "member", "အဖွဲ့ဝင်", "မိတ်ဆက်", "referral", "ငွေ", "payment", "သွင်း"]
-
-# =====================================================
-# CORE COMMANDS
+# USER & ADMIN ACCESS CONTROL PANEL
 # =====================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = """🌟 FCA Membership Bot\n\nမင်္ဂလာပါ။\n\nအသုံးပြုနိုင်သော Command များ\n\n/register - အဖွဲ့ဝင်စာရင်းသွင်းရန်\n/view - Profile ကြည့်ရန်\n/eligibility - ခံစားခွင့်အရည်အချင်းစစ်ရန်\n/referral - မိတ်ဆက်မှုအခြေအနေ\n/paymenthistory - မိမိငွေသွင်းမှတ်တမ်း\n/fundstatus - ရန်ပုံငွေအခြေအနေ\n/ask - AI သိလိုသည်များမေးရန်"""
-    await update.message.reply_text(text)
+    user_id = update.effective_user.id
+    
+    if user_id == ADMIN_ID:
+        # Admin Menu
+        text = """👑 FCA Bot Admin Control Panel
+
+မင်္ဂလာပါ အက်ဒမင်။ စနစ်ကို ထိန်းချုပ်ရန် အောက်ပါ Command များကို အသုံးပြုနိုင်ပါသည်။
+
+📊 စာရင်းဇယားနှင့် ဒေတာစုဆောင်းမှု
+/admin_menu - လုပ်ဆောင်ချက်များ လမ်းညွှန်ကြည့်ရန်
+/pending - စိစစ်ရန်ကျန်ရှိသော ငွေသွင်းမှုမှတ်တမ်းများ ကြည့်ရန်
+/backup - လက်ရှိ Database File ကို Backup ဆွဲယူရန်
+/export - အဖွဲ့ဝင်စာရင်းအားလုံးကို CSV Excel ထုတ်ယူရန်
+/fund_in <amount> <desc> - အဖွဲ့တွင်း အထွေထွေဝင်ငွေ ထည့်ရန်
+/fund_out <amount> <desc> - အဖွဲ့တွင်း အသုံးစရိတ်/ထောက်ပံ့ငွေ ထုတ်ရန်
+
+📌 Member တစ်ဦးချင်းစီအား ရှာဖွေရန်
+/search_member <စာသား/ဖုန်း/ID> - အဖွဲ့ဝင် ရှာဖွေရန်
+"""
+        await update.message.reply_text(text)
+    else:
+        # Member Menu
+        text = """🌟 FCA မတည်ရန်ပုံငွေအဖွဲ့မှ ကြိုဆိုပါသည်
+
+တစ်ဦးကိုတစ်ဦး ဖေးမကူညီနိုင်ရန် ရည်ရွယ်သော "အပြန်အလှန် အကျိုးပြုစုပေါင်းစနစ်" Bot ဖြစ်ပါသည်။
+
+📝 အဖွဲ့ဝင်သစ် စာရင်းသွင်းရန်:
+/register - ကိုယ်ရေးအချက်အလက်များ တင်သွင်းရန်
+
+📋 မိမိအချက်အလက်နှင့် ခံစားခွင့်များ စစ်ဆေးရန်:
+/view - မိမိ၏ Profile ကို ပြန်လည်ကြည့်ရှုရန်
+/eligibility - စပေါ်ငွေနှင့် နာရေးထောက်ပံ့ကြေး ခံစားခွင့် ရှိ/မရှိ စစ်ဆေးရန်
+/referral - မိမိမိတ်ဆက်ထားသော အဖွဲ့ဝင်ဦးရေနှင့် Reward အခြေအနေ
+/fundstatus - အဖွဲ့၏ လက်ရှိ စုစုပေါင်း ရန်ပုံငွေ အခြေအနေ
+
+🤖 FCA AI Assistant:
+Bot ထံသို့ စည်းမျဉ်းစည်းကမ်းများနှင့် ပတ်သက်၍ သိလိုသည်များကို တိုက်ရိုက် ရိုက်နှိပ်မေးမြန်းနိုင်ပါသည်။"""
+        await update.message.reply_text(text)
 
 # =====================================================
-# CONVERSATION 1: MEMBER REGISTER SYSTEM
+# MEMBER REGISTRATION CONVERSATION Flow
 # =====================================================
-REG_NAME, REG_PHONE, REG_FATHER, REG_MOTHER, REG_NRC, REG_ADDRESS, REG_JOB, REG_DEPARTMENT, REG_PHOTO = range(9)
+NAME, PHONE, FATHER, MOTHER, NRC, ADDRESS, JOB, DEPARTMENT, PHOTO = range(9)
 
-async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id == ADMIN_ID:
+        await update.message.reply_text("❌ Admin သည် ရုံးလုပ်ငန်းစာရင်းများသာ ကိုင်တွယ်ရန်ဖြစ်သဖြင့် Register လုပ်ရန်မလိုပါ။")
+        return ConversationHandler.END
+        
     conn = db_connect()
     cur = conn.cursor()
     cur.execute("SELECT member_id FROM members WHERE telegram_id=?", (update.effective_user.id,))
@@ -160,60 +181,60 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     if exists:
-        await update.message.reply_text("❌ သင်သည် အဖွဲ့ဝင်စာရင်း သွင်းပြီးသားဖြစ်ပါသည်။")
+        await update.message.reply_text("❌ သင်သည် အဖွဲ့ဝင်စာရင်း သွင်းပြီးသားဖြစ်နေပါသည်။ /view ဖြင့် Profile ပြန်ကြည့်နိုင်ပါသည်။")
         return ConversationHandler.END
 
-    await update.message.reply_text("📝 FCA Member Registration\n\nအမည်ကို ရိုက်ထည့်ပေးပါ။")
-    return REG_NAME
+    await update.message.reply_text("📝 FCA Member Registration\n\nအဖွဲ့ဝင်အဖြစ် ပါဝင်လိုသူ၏ 'အမည်' ကို ရိုက်ထည့်ပေးပါ။")
+    return NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["reg_name"] = update.message.text
-    await update.message.reply_text("📞 ဖုန်းနံပါတ် ထည့်ပါ")
-    return REG_PHONE
+    context.user_data["name"] = update.message.text
+    await update.message.reply_text("📞 ဆက်သွယ်ရန် 'ဖုန်းနံပါတ်' ထည့်ပေးပါ။")
+    return PHONE
 
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["reg_phone"] = update.message.text
-    await update.message.reply_text("👨 ဖခင်အမည် ထည့်ပါ")
-    return REG_FATHER
+    context.user_data["phone"] = update.message.text
+    await update.message.reply_text("👨 'ဖခင်အမည်' ကို ထည့်ပေးပါ။")
+    return FATHER
 
 async def get_father(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["reg_father"] = update.message.text
-    await update.message.reply_text("👩 မိခင်အမည် ထည့်ပါ")
-    return REG_MOTHER
+    context.user_data["father_name"] = update.message.text
+    await update.message.reply_text("👩 'မိခင်အမည်' ကို ထည့်ပေးပါ။")
+    return MOTHER
 
 async def get_mother(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["reg_mother"] = update.message.text
-    await update.message.reply_text("🪪 မှတ်ပုံတင်အမှတ် ထည့်ပါ")
-    return REG_NRC
+    context.user_data["mother_name"] = update.message.text
+    await update.message.reply_text("🪪 'မှတ်ပုံတင်အမှတ် (NRC)' ကို ထည့်ပေးပါ။")
+    return NRC
 
 async def get_nrc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["reg_nrc"] = update.message.text
-    await update.message.reply_text("🏠 လက်ရှိလိပ်စာ ထည့်ပါ")
-    return REG_ADDRESS
+    context.user_data["nrc"] = update.message.text
+    await update.message.reply_text("🏠 'လက်ရှိနေရပ်လိပ်စာ' အပြည့်အစုံကို ထည့်ပေးပါ။")
+    return ADDRESS
 
 async def get_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["reg_address"] = update.message.text
-    await update.message.reply_text("💼 အလုပ်အကိုင် ထည့်ပါ")
-    return REG_JOB
+    context.user_data["address"] = update.message.text
+    await update.message.reply_text("💼 'အလုပ်အကိုင်' ကို ရိုက်ထည့်ပေးပါ။")
+    return JOB
 
 async def get_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["reg_job"] = update.message.text
-    await update.message.reply_text("🏢 ဌာန ထည့်ပါ")
-    return REG_DEPARTMENT
+    context.user_data["job"] = update.message.text
+    await update.message.reply_text("🏢 မိမိလုပ်ကိုင်နေသော 'ဌာန' ကို ရိုက်ထည့်ပေးပါ။")
+    return DEPARTMENT
 
 async def get_department(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["reg_dept"] = update.message.text
-    await update.message.reply_text("📸 Profile Photo ပို့ပေးပါ။ (Telegram Photo အဖြစ် ပို့ရန်)")
-    return REG_PHOTO
+    context.user_data["department"] = update.message.text
+    await update.message.reply_text("📸 Profile Photo ပို့ပေးပါ။\n\nမိမိပုံကို Telegram Photo (ဓာတ်ပုံအစစ်) အဖြစ် တိုက်ရိုက်တင်ပေးပါ။ File အနေဖြင့် မပို့ပါနှင့်။")
+    return PHOTO
 
 async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
-        await update.message.reply_text("❌ တရားဝင် ဓာတ်ပုံ ပို့ပေးရန် လိုအပ်ပါသည်။")
-        return REG_PHOTO
+        await update.message.reply_text("❌ လုံခြုံရေးအရ ဓာတ်ပုံ တင်ပေးရန် လိုအပ်ပါသည်။ ဓာတ်ပုံပြန်ပို့ပေးပါ။")
+        return PHOTO
 
     photo_id = update.message.photo[-1].file_id
     member_id = generate_member_id()
-    join_date = datetime.now().strftime("%d-%m-%Y")
+    join_date_str = datetime.now().strftime("%d-%m-%Y")
 
     conn = db_connect()
     cur = conn.cursor()
@@ -221,123 +242,19 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         INSERT INTO members (member_id, telegram_id, name, phone, father_name, mother_name, nrc, address, job, department, join_date, profile_photo_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        member_id, update.effective_user.id, context.user_data["reg_name"], context.user_data["reg_phone"],
-        context.user_data["reg_father"], context.user_data["reg_mother"], context.user_data["reg_nrc"],
-        context.user_data["reg_address"], context.user_data["reg_job"], context.user_data["reg_dept"],
-        join_date, photo_id
+        member_id, update.effective_user.id, context.user_data["name"], context.user_data["phone"],
+        context.user_data["father_name"], context.user_data["mother_name"], context.user_data["nrc"],
+        context.user_data["address"], context.user_data["job"], context.user_data["department"],
+        join_date_str, photo_id
     ))
     conn.commit()
     conn.close()
 
-    await update.message.reply_text(f"🎉 FCA Member Registration Complete\n\n🆔 Member ID: {member_id}\n👤 Name: {context.user_data['reg_name']}\n📅 Join Date: {join_date}\n\nအဖွဲ့ဝင်အဖြစ် အောင်မြင်စွာ စာရင်းသွင်းပြီးပါပြီ။")
+    await update.message.reply_text(f"🎉 FCA Member Registration Complete\n\n🆔 မိတ်ဆွေ၏ Member ID မှာ: {member_id} ဖြစ်ပါသည်။\n👤 အမည်: {context.user_data['name']}\n📅 စတင်ဝင်ရောက်သည့်နေ့: {join_date_str}\n\nလက်စွဲစာစောင်ပါ အပိုင်း (၁၀) အရ ဤစနစ်ကို အသုံးပြုခြင်းသည် စည်းကမ်းချက်များကို နှစ်ဦးသဘောတူ ဝန်ခံကတိပြုပြီးဖြစ်သည်ဟု မှတ်ယူပါသည်။")
     return ConversationHandler.END
 
 # =====================================================
-# CONVERSATION 2: SMART PAYMENT RECORD SYSTEM (ADMIN)
-# =====================================================
-PAY_MEMBER, PAY_METHOD, PAY_PROVIDER, PAY_AMOUNT, PAY_MONTH, PAY_PROOF = range(6)
-
-async def add_payment_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await admin_only(update): return ConversationHandler.END
-    await update.message.reply_text("💰 Payment Record System\n\nMember ID ကို ရိုက်ထည့်ပေးပါ (ဥပမာ - FCA-A8K29Z)")
-    return PAY_MEMBER
-
-async def payment_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    m_id = update.message.text.strip().upper()
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("SELECT name FROM members WHERE member_id=?", (m_id,))
-    member = cur.fetchone()
-    conn.close()
-
-    if not member:
-        await update.message.reply_text("❌ Member ID မတွေ့ရှိပါ။ ကျေးဇူးပြု၍ ပြန်လည်စစ်ဆေးပါ။")
-        return ConversationHandler.END
-
-    context.user_data["pay_member_id"] = m_id
-    context.user_data["pay_member_name"] = member[0]
-
-    keyboard = [
-        [InlineKeyboardButton("💵 Cash", callback_data="CASH")],
-        [InlineKeyboardButton("📱 E-Money", callback_data="EMONEY")]
-    ]
-    await update.message.reply_text(f"👤 Member: {member[0]}\n\nPayment Type ကို ရွေးချယ်ပါ-", reply_markup=InlineKeyboardMarkup(keyboard))
-    return PAY_METHOD
-
-async def payment_method_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    method = query.data
-    context.user_data["pay_method"] = method
-
-    if method == "CASH":
-        context.user_data["pay_provider"] = "Cash"
-        await query.edit_message_text("💵 Cash Payment\n\nပေးသွင်းငွေ ပမာဏကို ဂဏန်းသီးသန့် ထည့်ပါ (ဥပမာ - 2000)")
-        return PAY_AMOUNT
-    else:
-        await query.edit_message_text("📱 E-Money Payment\n\nအသုံးပြုသော Payment App အမည်ကို ရေးပါ (ဥပမာ - KPay, WavePay)")
-        return PAY_PROVIDER
-
-async def payment_provider(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["pay_provider"] = update.message.text.strip()
-    await update.message.reply_text("💰 ပေးသွင်းငွေ ပမာဏကို ထည့်ပါ (ဥပမာ - 2000)")
-    return PAY_AMOUNT
-
-async def payment_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        context.user_data["pay_amount"] = int(update.message.text.strip())
-    except ValueError:
-        await update.message.reply_text("❌ ငွေပမာဏကို ဂဏန်းသီးသန့်သာ ထည့်သွင်းပေးပါ။")
-        return PAY_AMOUNT
-        
-    await update.message.reply_text("📅 မည်သည့်လအတွက် ပေးသွင်းခြင်းလဲ? (ဥပမာ - August 2026)")
-    return PAY_MONTH
-
-async def payment_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["pay_month"] = update.message.text.strip()
-
-    if context.user_data["pay_method"] == "CASH":
-        # Cash အလိုအလျောက် Approved ဖြစ်စေမည်
-        conn = db_connect()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO payments (member_id, amount, payment_method, provider, payment_month, payment_date, proof_photo_id, status, approved_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            context.user_data["pay_member_id"], context.user_data["pay_amount"], "Cash", "Cash",
-            context.user_data["pay_month"], datetime.now().strftime("%d-%m-%Y"), None, "APPROVED", str(update.effective_user.id)
-        ))
-        conn.commit()
-        conn.close()
-        await update.message.reply_text("✅ Cash Payment အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ။")
-        return ConversationHandler.END
-    else:
-        await update.message.reply_text("📸 ငွေလွှဲ Screenshot ပုံတင်ပေးပါ။")
-        return PAY_PROOF
-
-async def payment_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.photo:
-        await update.message.reply_text("❌ Screenshot ပုံပို့ရန် လိုအပ်ပါသည်။")
-        return PAY_PROOF
-
-    photo_id = update.message.photo[-1].file_id
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO payments (member_id, amount, payment_method, provider, payment_month, payment_date, proof_photo_id, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        context.user_data["pay_member_id"], context.user_data["pay_amount"], "EMONEY", context.user_data["pay_provider"],
-        context.user_data["pay_month"], datetime.now().strftime("%d-%m-%Y"), photo_id, "PENDING"
-    ))
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text("⏳ Payment Screenshot ရရှိပါပြီ။ Admin အတည်ပြုချက်ရယူရန် စောင့်ဆိုင်းဆဲဖြစ်ပါသည်။")
-    return ConversationHandler.END
-
-# =====================================================
-# PROFILE & HISTORY VISUALIZATION
+# MEMBER UTILITIES
 # =====================================================
 async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
@@ -347,63 +264,39 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     if not m:
-        await update.message.reply_text("❌ Member မတွေ့ပါ။ ဦးစွာ /register ပြုလုပ်ပါ။")
+        await update.message.reply_text("❌ အဖွဲ့ဝင်စာရင်း မတွေ့ပါ။ ကျေးဇူးပြု၍ ဦးစွာ /register ပြုလုပ်ပေးပါ။")
         return
 
-    text = f"📋 FCA MEMBER PROFILE\n\n🆔 ID: {m[1]}\n👤 အမည်: {m[3]}\n📞 ဖုန်း: {m[4]}\n👨 ဖခင်: {m[5]}\n👩 မိခင်: {m[6]}\n🪪 NRC: {m[7]}\n🏠 လိပ်စာ: {m[8]}\n💼 အလုပ်အကိုင်: {m[9]}\n🏢 ဌာန: {m[10]}\n📅 Join Date: {m[11]}\n✅ Status: {m[13]}"
-    if m[12]:
-        await update.message.reply_photo(photo=m[12], caption=text)
-    else:
-        await update.message.reply_text(text)
-
-async def payment_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("SELECT member_id FROM members WHERE telegram_id=?", (update.effective_user.id,))
-    res = cur.fetchone()
-
-    if not res:
-        await update.message.reply_text("❌ Member မှတ်တမ်း မတွေ့ပါ။")
-        conn.close()
-        return
-
-    cur.execute("SELECT amount, payment_method, provider, payment_month, payment_date, status FROM payments WHERE member_id=? ORDER BY id DESC", (res[0],))
-    payments = cur.fetchall()
-    conn.close()
-
-    if not payments:
-        await update.message.reply_text("❌ ပေးသွင်းမှုမှတ်တမ်း မရှိသေးပါ။")
-        return
-
-    text = "💰 FCA Payment History\n\n"
-    for p in payments:
-        text += f"📅 {p[3]} ({p[5]})\n💵 {p[0]:,} MMK | {p[1]}-{p[2]}\n🕒 သွင်းသည့်နေ့- {p[4]}\n----------------\n"
-    await update.message.reply_text(text)
+    text = f"📋 FCA MEMBER PROFILE\n\n🆔 ID: {m[1]}\n👤 အမည်: {m[3]}\n📞 ဖုန်း: {m[4]}\n👨 ဖခင်: {m[5]}\n👩 မိခင်: {m[6]}\n🪪 NRC: {m[7]}\n🏠 လိပ်စာ: {m[8]}\n💼 အလုပ်အကိုင်: {m[9]}\n🏢 ဌာန: {m[10]}\n📅 Join Date: {m[11]}\n📌 အခြေအနေ: {m[13]}"
+    await update.message.reply_photo(photo=m[12], caption=text)
 
 async def eligibility(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     cur = conn.cursor()
-    cur.execute("SELECT name, join_date FROM members WHERE telegram_id=?", (update.effective_user.id,))
+    cur.execute("SELECT member_id, name, join_date FROM members WHERE telegram_id=?", (update.effective_user.id,))
     member = cur.fetchone()
     conn.close()
 
     if not member:
-        await update.message.reply_text("❌ Member မတွေ့ပါ။")
+        await update.message.reply_text("❌ အဖွဲ့ဝင်စာရင်း မတွေ့ပါ။")
         return
 
-    months = calculate_months(member[1])
-    deposit = "✅ ရရှိနိုင်ပါပြီ" if months >= 3 else "❌ မရသေးပါ"
-    benefit = "✅ ခံစားခွင့်ရှိပါသည်" if months >= 12 else "❌ မရသေးပါ"
+    months = calculate_months(member[2])
+    
+    # Waiting Period Rule (3 Months for deposit, 12 Months for Death Benefit)
+    deposit = "✅ (၃) လပြည့်ပြီးသဖြင့် ပြန်လည်ထုတ်ယူခွင့် ရှိပါသည်" if months >= 3 else f"❌ စောင့်ဆိုင်းဆဲ (ကျန်ရှိသက်တမ်း: {3 - months} လ)"
+    benefit = "✅ (၁) နှစ်ပြည့်ပြီးသဖြင့် သေဆုံးမှုထောက်ပံ့ကြေး အပြည့်အဝ ခံစားခွင့်ရှိပါသည်" if months >= 12 else f"❌ စောင့်ဆိုင်းကာလမပြည့်သေးပါ (သွင်းငွေများကိုသာ အတိုးမဲ့ ပြန်ထုတ်ပိုင်ခွင့်ရှိသည်)"
 
-    await update.message.reply_text(f"🔍 FCA Eligibility စစ်ဆေးချက်\n\n👤 Member: {member[0]}\n📅 Join Date: {member[1]}\n⏳ သက်တမ်း: {months} လ\n💰 Security Deposit: {deposit}\n🕊️ Death Support: {benefit}")
+    await update.message.reply_text(f"🔍 FCA ခံစားခွင့်ဆိုင်ရာ စစ်ဆေးချက်\n\n👤 အဖွဲ့ဝင်အမည်: {member[1]}\n📅 စတင်ဝင်ရောက်သည့်နေ့: {member[2]}\n⏳ လက်ရှိအဖွဲ့ဝင်သက်တမ်း: {months} လ\n\n💰 စပေါ်ငွေ (၅,၀၀၀ ကျပ်) အခြေအနေ:\n{deposit}\n\n🕊️ နာရေးထောက်ပံ့ကြေး ခံစားခွင့်အခြေအနေ:\n{benefit}")
 
 async def referral_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     cur = conn.cursor()
     cur.execute("SELECT member_id FROM members WHERE telegram_id=?", (update.effective_user.id,))
     member = cur.fetchone()
+    
     if not member:
-        await update.message.reply_text("❌ Member မတွေ့ပါ။")
+        await update.message.reply_text("❌ အဖွဲ့ဝင်စာရင်း မတွေ့ပါ။")
         conn.close()
         return
 
@@ -411,75 +304,10 @@ async def referral_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = cur.fetchone()[0]
     conn.close()
 
-    status = "✅ Reward ရရှိနိုင်ပါပြီ" if count >= 5 else "❌ မရသေးပါ"
-    await update.message.reply_text(f"🎁 Referral Status\n\n🆔 ID: {member[0]}\n👥 မိတ်ဆက်ထားသူ: {count} ယောက်\nStatus: {status}")
-
-# =====================================================
-# ADMIN VERIFICATION COMMANDS
-# =====================================================
-async def pending_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await admin_only(update): return
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("SELECT id, member_id, amount, provider, payment_month FROM payments WHERE status='PENDING'")
-    rows = cur.fetchall()
-    conn.close()
-
-    if not rows:
-        await update.message.reply_text("✅ စစ်ဆေးရန်ကျန်သော ပေးသွင်းမှုမရှိပါ။")
-        return
-
-    text = "⏳ Pending Payments\n\n"
-    for p in rows:
-        text += f"🆔 Pay ID: {p[0]}\n👤 Member: {p[1]}\n💰 Amount: {p[2]:,} MMK\n💳 Method: {p[3]} ({p[4]})\nApprove: /approve {p[0]}\nReject: /reject {p[0]}\n----------------\n"
-    await update.message.reply_text(text)
-
-async def approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await admin_only(update): return
-    if not context.args:
-        await update.message.reply_text("အသုံးပြုပုံ- /approve [payment_id]")
-        return
-
-    pay_id = context.args[0]
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("UPDATE payments SET status='APPROVED', approved_by=? WHERE id=?", (str(update.effective_user.id), pay_id))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text(f"✅ Payment ID: {pay_id} ကို အတည်ပြုပြီးပါပြီ။")
-
-async def reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await admin_only(update): return
-    if not context.args: return
-    pay_id = context.args[0]
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("UPDATE payments SET status='REJECTED' WHERE id=?", (pay_id,))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text(f"❌ Payment ID: {pay_id} ကို ငြင်းပယ်ပြီးပါပြီ။")
-
-# =====================================================
-# FINANCIALS & MANAGEMENT
-# =====================================================
-async def add_fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await admin_only(update): return
-    if len(context.args) < 2:
-        await update.message.reply_text("အသုံးပြုပုံ- /fund [amount] [description]")
-        return
-    try:
-        amount = int(context.args[0])
-    except:
-        await update.message.reply_text("❌ ငွေပမာဏ မှားယွင်းနေပါသည်။")
-        return
-    desc = " ".join(context.args[1:])
+    # Referral Reward Rule (5 Active members)
+    status = "✅ သတ်မှတ်ချက်ပြည့်မီသဖြင့် လစဉ်ကြေး ၂,၀၀၀ ကျပ် ကင်းလွတ်ခွင့် ရရှိပါသည်" if count >= 5 else f"❌ မပြည့်သေးပါ (ယခု မိတ်ဆက်ပြီးသူ: {count}/၅ ဦး)"
     
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO funds (fund_type, amount, description, created_at) VALUES (?,?,?,?)", ("OUT", amount, desc, datetime.now().strftime("%d-%m-%Y")))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text(f"📉 အသုံးစရိတ် နှုတ်ပြီးပါပြီ-\nပမာဏ: {amount:,} MMK\nအကြောင်းပြချက်: {desc}")
+    await update.message.reply_text(f"🎁 Referral ဆုလာဘ် အခြေအနေ\n\n🆔 မိမိ၏ ID: {member[0]}\n👥 အောင်မြင်စွာ မိတ်ဆက်ထားသူ: {count} ဦး\n\n📌 ဆုလာဘ်ရရှိမှု: {status}\n\n⚠️ စည်းကမ်းချက်- ခေါ်ယူလာသူ ၅ ဦးစလုံး ၃ လဆက်တိုက် ကြေးမှန်မှန်သွင်းမှသာ အတည်ပြုမည်ဖြစ်ပြီး၊ တစ်ဦးဦးပျက်ကွက်ပါက ပုံမှန်အတိုင်း လစဉ်ကြေး ပြန်သွင်းရပါမည်။ သေဆုံးမှုထည့်ဝင်ငွေ ၁,၀၀0 ကျပ်ကိုမူ ပုံမှန်ထည့်ရပါမည်။")
 
 async def fund_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
@@ -489,159 +317,204 @@ async def fund_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("SELECT SUM(amount) FROM funds WHERE fund_type='OUT'")
     total_out = cur.fetchone()[0] or 0
     conn.close()
-    await update.message.reply_text(f"📊 FCA ရန်ပုံငွေအခြေအနေ\n\n💰 လက်ကျန်ရန်ပုံငွေ: {total_in - total_out:,} MMK\n📥 စုစုပေါင်းဝင်ငွေ: {total_in:,} MMK\n📤 စုစုပေါင်းအသုံးစရိတ်: {total_out:,} MMK")
 
-async def statistics(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await admin_only(update): return
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM members")
-    m_count = cur.fetchone()[0]
-    cur.execute("SELECT SUM(amount) FROM payments WHERE payment_method='Cash' AND status='APPROVED'")
-    cash = cur.fetchone()[0] or 0
-    cur.execute("SELECT SUM(amount) FROM payments WHERE payment_method='EMONEY' AND status='APPROVED'")
-    emoney = cur.fetchone()[0] or 0
-    conn.close()
-    await update.message.reply_text(f"📊 FCA စာရင်းဇယားများ\n\n👥 စုစုပေါင်းအဖွဲ့ဝင်: {m_count} ဦး\n💵 လက်ငင်းငွေသားစနစ်: {cash:,} MMK\n📱 E-Money စနစ်: {emoney:,} MMK")
+    # Base Reserve Fund is 200,000 MMK
+    reserve_fund = 200000
+    current_pool = reserve_fund + total_in - total_out
 
+    await update.message.reply_text(f"📊 FCA စုစုပေါင်း ရန်ပုံငွေထုတ်ပြန်ချက်\n\n🧱 စတင်မတည်ငွေ (Reserve Fund): {reserve_fund:,} MMK\n📥 စုစုပေါင်း ဝင်ငွေမှတ်တမ်း: {total_in:,} MMK\n📤 စုစုပေါင်း အသုံးပြုမှု/ထောက်ပံ့မှု: {total_out:,} MMK\n\n💰 လက်ရှိဗဟိုရန်ပုံငွေ လက်ကျန်: {current_pool:,} MMK\n\n🤝 စနစ်သည် ပွင့်လင်းမြင်သာမှုရှိစွာ စာရင်းဇယားများကို စက္ကန့်နှင့်အမျှ တိကျစွာ မှတ်တမ်းတင်ထားပါသည်။")
+
+# =====================================================
+# HAND-BOOK BASED SMART AI ASSISTANT (12 SECTIONS LOGIC)
+# =====================================================
+async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id == ADMIN_ID:
+        return # Admin text messages are ignored by AI responses
+        
+    question = update.message.text.lower()
+    reply = ""
+
+    # Section 1: Intro & Purpose
+    if any(x in question for x in ["နိဒါန်း", "ရည်ရွယ်ချက်", "vision", "အာမခံလုပ်ငန်း", "reserve fund", "မတည်ငွေ"]):
+        reply = "🤝 **အပိုင်း (၁) - ရန်ပုံငွေအဖွဲ့၏ မူဝါဒနှင့် ရည်ရွယ်ချက်များ**\n\nဤအဖွဲ့သည် စီးပွားဖြစ်အာမခံလုပ်ငန်းမဟုတ်ဘဲ တစ်ဦးကိုတစ်ဦး ဖေးမကူညီရန် 'အပြန်အလှန် အကျိုးပြုစုပေါင်းစနစ်' ဖြစ်သည်။ ကျွန်ုပ်တို့အဖွဲ့သည် စီမံခန့်ခွဲသူ၏ မတည်ရင်းနှီးငွေ (Reserve Fund) **၂ သိန်းကျပ်** ဖြင့် အခိုင်အမာ စတင်ထားခြင်း ဖြစ်သဖြင့် ယုံကြည်စိတ်ချစွာ ပါဝင်နိုင်ပါသည်။"
+
+    # Section 2 & 8: Fees, contribution & Referral Rewards
+    elif any(x in question for x in ["လစဉ်ကြေး", "စပေါ်ငွေ", "ငွေသွင်း", "security deposit", "ဘယ်လောက်သွင်း", "ကြိုတင်ပေး"]):
+        reply = "💰 **အပိုင်း (၂) - ထည့်ဝင်ကြေးဆိုင်ရာ စည်းမျဉ်းများ**\n\n• **အာမခံစပေါ်ငွေ (Security Deposit):** စတင်ဝင်ရောက်ချိန်တွင် ၅,၀၀၀ ကျပ် တစ်ကြိမ်တည်း ပေးသွင်းရမည်။ (၃ လပြည့်လျှင် ပြန်ထုတ်နိုင်သည်။ ၃ လမပြည့်ဘဲ ထွက်ပါက ပြန်မရပါ)\n• **လစဉ်ထည့်ဝင်ကြေး:** တစ်လလျှင် ၂,၀၀၀ ကျပ် တိတိ ဖြစ်ပြီး၊ ၃ လစာ၊ ၆ လစာ သို့မဟုတ် ၁ နှစ်စာ (၂၄,၀၀၀ ကျပ်) ကြိုတင်ပေးသွင်းနိုင်ပါသည်။"
+        
+    elif any(x in question for x in ["မိတ်ဆက်", "referral", "reward", "၅ ယောက်", "ဆုလာဘ်"]):
+        reply = "🎁 **အပိုင်း (၂/၈) - မိတ်ဆက်သူများအတွက် အထူးခံစားခွင့်**\n\nအဖွဲ့ဝင်သစ် (၅) ဦးအား အောင်မြင်စွာ မိတ်ဆက်ပေးနိုင်သူသည် ထိုသူများ ၃ လဆက်တိုက် လစဉ်ကြေးမှန်မှန် သွင်းပြီးသည့် နောက်လမှစ၍ လစဉ်ကြေး ၂,၀၀၀ ကျပ် ကင်းလွတ်ခွင့်ရမည်။ သို့သော် တစ်ဦးဦး ပျက်ကွက်ပါက ပုံမှန်အတိုင်း ပြန်ဆောင်ရမည်ဖြစ်ပြီး၊ သေဆုံးမှုထည့်ဝင်ကြေး ၁,၀၀၀ ကျပ်ကိုမူ ကင်းလွတ်ခွင့်မရှိဘဲ အားလုံးနည်းတူ ထည့်ဝင်ရပါမည်။"
+
+    # Section 3 & 12: Payout Formula & Multiple Claims
+    elif any(x in question for x in ["သေဆုံး", "ထောက်ပံ့ကြေး", "နာရေး", "တွက်ချက်ပုံ", "လျော်ကြေး"]):
+        reply = "🕊️ **အပိုင်း (၃) - ထောက်ပံ့ငွေ တွက်ချက်ပုံစနစ်**\n\nပုံသေ လျော်ကြေးငွေ ပေးအပ်ခြင်းမဟုတ်ဘဲ အချိုးကျစနစ်ကို ကျင့်သုံးသည်။ အဖွဲ့ဝင်တစ်ဦး သေဆုံးပါက (သက်တမ်း ၁ နှစ်ပြည့်ပြီးသူဖြစ်လျှင်):\n\n၁။ အဖွဲ့ဝင်တစ်ဦးစီမှ **၁,၀၀၀ ကျပ်စီ** ထည့်ဝင်သော စုစုပေါင်းငွေ\n+\n၂။ ဗဟိုရန်ပုံငွေ လက်ကျန် (Total Fund) ၏ **၂၀% တိတိ**\n\nတို့ကို ပေါင်းစပ်ထောက်ပံ့မည်ဖြစ်သည်။ စောင့်ဆိုင်းကာလ ၁ နှစ်မပြည့်မီ သေဆုံးပါက သွင်းထားသောငွေများကိုသာ အတိုးမဲ့ ပြန်လည်ထုတ်ယူခွင့်ရှိသည်။"
+
+    elif any(x in question for x in ["တစ်လအတွင်း", "၂ ယောက်သေ", "ပြတ်လပ်", "split"]):
+        reply = "🔄 **အပိုင်း (၃) - တစ်လအတွင်း သေဆုံးမှု တစ်ခုထက်ပိုရှိခြင်း**\n\nအကယ်၍ တစ်လအတွင်း အဖွဲ့ဝင် ၂ ဦးနှင့်အထက် သေဆုံးမှုရှိပါက၊ စုစုပေါင်းရရှိသော ထောက်ပံ့ငွေ (၁,၀၀၀ စီကောက်ငွေ + ရန်ပုံငွေ၏ ၂၀%) အား သေဆုံးသူများအကြား ညီတူညီမျှ ခွဲဝေ (Split) ပေးအပ်မည် ဖြစ်သည်။ ထောက်ပံ့ကြေးကို စိစစ်မှုများပြုလုပ်ပြီး 'လကုန်ရက်' တွင်သာ စုပေါင်းထုတ်ပေးသည်။"
+
+    # Section 4 & 6: Management & Transparency & Asset
+    elif any(x in question for x in ["စီမံခန့်ခွဲမှု", "ဖြတ်တောက်", "ရွှေဝယ်", "ရင်းနှီးမြှုပ်နှံ", "စာရင်းထုတ်"]):
+        reply = "🛠️ **အပိုင်း (၄/၆) - စီမံခန့်ခွဲမှုနှင့် ရန်ပုံငွေထိန်းသိမ်းခြင်း**\n\nအဖွဲ့ဝင်အရေအတွက် (၂၀) ဦး ပြည့်မြောက်သည့်နေ့မှစ၍ လစဉ်ရရှိသော ရန်ပုံငွေစုစုပေါင်း၏ (၁၀%) အား လည်ပတ်မှုစရိတ်အဖြစ် ဖြတ်တောက်မည်။ ငွေကြေးဖောင်းပွမှုဒဏ်မှ ကာကွယ်ရန် ရန်ပုံငွေများကို ခိုင်မာသော ပိုင်ဆိုင်မှုများ (ဥပမာ- ရွှေ) အဖြစ် ပြောင်းလဲသိမ်းဆည်းပိုင်ခွင့် စီမံခန့်ခွဲသူတွင် ရှိသည်။ စာရင်းဇယားများကို လစဉ် လူမှုကွန်ရက်တွင် ပွင့်လင်းမြင်သာစွာ အမြဲထုတ်ပြန်ပေးမည်။"
+
+    # Section 4 & 7: Obligations, Withdrawal & Dismissal
+    elif any(x in question for x in ["နုတ်ထွက်", "ထွက်ချင်", "ပြန်အမ်း", "ပျက်ကွက်", "ထုတ်ပယ်"]):
+        reply = "🚪 **အပိုင်း (၄/၇) - နုတ်ထွက်ခြင်းနှင့် ရပ်စဲခံရခြင်း မူဝါဒ**\n\n• **၁ နှစ်အတွင်းနုတ်ထွက်ပါက:** မိမိပေးသွင်းထားသော လစဉ်ကြေးစုစုပေါင်းအား အတိုးမဲ့ ပြန်ထုတ်ယူခွင့်ရှိသည်။\n• **၁ နှစ်ကျော်မှနုတ်ထွက်ပါက:** အကျိုးခံစားခွင့်များ ရယူထားပြီးဖြစ်၍ ငွေပြန်ထုတ်ပိုင်ခွင့် မရှိပါ။\n⚠️ **သတိပြုရန်:** သေဆုံးမှု ထပ်ဆောင်းငွေ ၁,၀၀၀ ကျပ်အား ၃ ရက်အတွင်း သွင်းရမည်။ သတ်မှတ်ထားသောငွေများကို (၃) ကြိမ်နှင့်အထက် ပျက်ကွက်ပါက အဖွဲ့ဝင်အဖြစ်မှ အလိုအလျောက် ရပ်စဲခံရမည်ဖြစ်ပြီး ငွေပြန်တောင်းပိုင်ခွင့် မရှိပါ။"
+
+    # Section 5: Exclusions (When they don't get paid)
+    elif any(x in question for x in ["မရနိုင်သော", "ချွင်းချက်", "သတ်သေ", "ရာဇဝတ်မှု", "မူးယစ်ဆေး"]):
+        reply = "🚫 **အပိုင်း (၅) - ထောက်ပံ့ကြေးမရနိုင်သော ချွင်းချက်များ**\n\nအောက်ပါအခြေအနေများကြောင့် သေဆုံးခြင်းဖြစ်ပါက ထောက်ပံ့ကြေး လုံးဝ ပေးအပ်မည်မဟုတ်ပါ -\n၁။ မိမိကိုယ်ကိုယ် အဆုံးစီရင်ခြင်း (Suicide)\n၂။ ရာဇဝတ်မှု ကျူးလွန်နေစဉ်အတွင်း သေဆုံးခြင်း\n၃။ မူးယစ်ဆေးဝါး အလွန်အကျွံသုံးစွဲခြင်းကြောင့် သေဆုံးခြင်း\n၄။ အဖွဲ့ဝင်ဝင်စဉ်ကတည်းက ကျန်းမာရေးအခြေအနေအား လိမ်လည်ဖုံးကွယ်ခြင်း။"
+
+    # Section 11: Internal Credit & Bonus
+    elif any(x in question for x in ["အကြွေး", "ကုန်ပစ္စည်း", "bonus", "အမြတ်ခွဲဝေ"]):
+        reply = "🏦 **အပိုင်း (၁၁) - အသေးစား အကြွေးဝယ်စနစ်နှင့် ရန်ပုံငွေ**\n\nအဖွဲ့ဝင်သက်တမ်းရင့်ပြီး စနစ်တကျရှိသူများအား အဖွဲ့၏ရန်ပုံငွေကို အခြေခံ၍ အိမ်သုံးကုန်ပစ္စည်းများ အကြွေးဝယ်ယူခွင့် သို့မဟုတ် လူမှုဖူလုံရေး ကြိုတင်ထုတ်ယူခွင့်ကို ရန်ပုံငွေ၏ (၃၀%) ထက်မပိုသော ကန့်သတ်ချက်ဖြင့် စီမံခန့်ခွဲသူမှ ခွင့်ပြုပေးနိုင်သည်။ အမြတ်များပြားလာပါက နှစ်ပတ်လည်လက်ဆောင်များ ပေးအပ်သွားမည်ဖြစ်သည်။"
+
+    # Section 12: Claim Process
+    elif any(x in question for x in ["တောင်းခံ", "လုံခြုံရေး", "အထောက်အထား", "ဆေးရုံမှတ်တမ်း"]):
+        reply = "🚨 **အပိုင်း (၁၂) - ထောက်ပံ့ကြေး တောင်းခံခြင်း လုပ်ငန်းစဉ်**\n\nအဖွဲ့ဝင်တစ်ဦး ကွယ်လွန်ပါက ကျန်ရစ်သူမိသားစုသည် (၂၄) နာရီအတွင်း စီမံခန့်ခွဲသူထံ ချက်ချင်းအကြောင်းကြားရမည်။ သေဆုံးကြောင်းအထောက်အထား (ဆေးရုံမှတ်တမ်း သို့မဟုတ် ရပ်ကွက်ထောက်ခံချက် မူရင်း) ကို တင်ပြရမည်ဖြစ်ပြီး စီမံခန့်ခွဲသူမှ (၃) ရက်အတွင်း စိစစ်ကာ ကျန်အဖွဲ့ဝင်များထံမှ ကောက်ခံခြင်းလုပ်ငန်းစဉ် စတင်ပါမည်။\n📞 အရေးပေါ်ဖုန်း - 09685247040"
+
+    else:
+        reply = "🤖 **FCA AI Assistant**\n\nမင်္ဂလာပါ၊ မေးခွန်းကို ရှာမတွေ့ပါ။ FCA စည်းမျဉ်းအဖွဲ့ဝင်လက်စွဲပါ အောက်ပါအကြောင်းအရာများကို တိုက်ရိုက် မေးမြန်းနိုင်ပါသည်။\n\nဥပမာ -\n• 'လစဉ်ကြေးနဲ့ စပေါ်ငွေ ဘယ်လောက်လဲ?'\n• 'နာရေးထောက်ပံ့ကြေး ဘယ်လိုတွက်လဲ?'\n• '၁ နှစ်မပြည့်ခင် နုတ်ထွက်ရင် ငွေပြန်ရလား?'\n• '၅ ယောက်ခေါ်ရင် တကယ်လစဉ်ကြေး အလကားရတာလား?'"
+
+    await update.message.reply_text(reply, parse_mode="Markdown")
+
+# =====================================================
+# ADMIN ONLY COMMANDS
+# =====================================================
 async def search_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await admin_only(update): return
-    keyword = " ".join(context.args).strip()
-    if not keyword:
-        await update.message.reply_text("ရှာဖွေရန်- /search [Name/Phone/ID]")
+    if update.effective_user.id != ADMIN_ID: return
+    
+    if not context.args:
+        await update.message.reply_text("အသုံးပြုပုံ: /search_member <အမည် သို့မဟုတ် ဖုန်း သို့မဟုတ် ID>")
         return
+
+    keyword = " ".join(context.args)
     conn = db_connect()
     cur = conn.cursor()
-    cur.execute("SELECT member_id, name, phone, join_date, status FROM members WHERE name LIKE ? OR member_id LIKE ? OR phone LIKE ?", (f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"))
+    cur.execute("""
+        SELECT member_id, name, phone, join_date, status 
+        FROM members 
+        WHERE name LIKE ? OR member_id LIKE ? OR phone LIKE ?
+    """, ("%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%"))
     rows = cur.fetchall()
     conn.close()
 
     if not rows:
-        await update.message.reply_text("❌ မည်သည့်အဖွဲ့ဝင်မှ မတွေ့ရှိပါ။")
+        await update.message.reply_text("❌ မည်သည့် Member အချက်အလက်မှ ရှာမတွေ့ပါ။")
         return
-    text = "🔍 ရှာဖွေတွေ့ရှိမှု ရလဒ်များ-\n\n"
-    for r in rows:
-        text += f"🆔 {r[0]} | 👤 {r[1]}\n📞 {r[2]} | 📅 {r[3]}\n📌 Status: {r[4]}\n----------------\n"
+
+    text = f"🔍 Search Results ({len(rows)} ဦးတွေ့ရှိ):\n\n"
+    for m in rows:
+        text += f"🆔 ID: {m[0]}\n👤 အမည်: {m[1]}\n📞 ဖုန်း: {m[2]}\n📅 ဝင်သည့်နေ့: {m[3]}\n📌 Status: {m[4]}\n----------------\n"
     await update.message.reply_text(text)
 
-# =====================================================
-# DATA MAINTENANCE (BACKUP & EXPORT)
-# =====================================================
+async def fund_in(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    if len(context.args) < 2:
+        await update.message.reply_text("အသုံးပြုပုံ: /fund_in <ပမာဏ> <အကြောင်းအရာ>")
+        return
+    
+    amount = int(context.args[0])
+    desc = " ".join(context.args[1:])
+    date_str = datetime.now().strftime("%d-%m-%Y")
+
+    conn = db_connect()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO funds (fund_type, amount, description, created_at) VALUES ('IN', ?, ?, ?)", (amount, desc, date_str))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(f"✅ ရန်ပုံငွေထဲသို့ ဝင်ငွေစာရင်းသွင်းပြီးပါပြီ။\n💰 ပမာဏ: {amount:,} MMK\n📝 အကြောင်းအရာ: {desc}")
+
+async def fund_out(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    if len(context.args) < 2:
+        await update.message.reply_text("အသုံးပြုပုံ: /fund_out <ပမာဏ> <အကြောင်းအရာ/နာရေးထောက်ပံ့မှု>")
+        return
+    
+    amount = int(context.args[0])
+    desc = " ".join(context.args[1:])
+    date_str = datetime.now().strftime("%d-%m-%Y")
+
+    conn = db_connect()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO funds (fund_type, amount, description, created_at) VALUES ('OUT', ?, ?, ?)", (amount, desc, date_str))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(f"💸 ရန်ပုံငွေထဲမှ အသုံးစရိတ်/ထောက်ပံ့ငွေ ထုတ်ယူမှု သွင်းပြီးပါပြီ။\n💰 ပမာဏ: {amount:,} MMK\n📝 အကြောင်းအရာ: {desc}")
+
 async def backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await admin_only(update): return
+    if update.effective_user.id != ADMIN_ID: return
     try:
         shutil.copy(DATABASE, "fca_backup.db")
-        await update.message.reply_document(document=open("fca_backup.db", "rb"), filename="fca_backup.db", caption="✅ Database Backup အောင်မြင်ပါသည်။")
+        await update.message.reply_document(document=open("fca_backup.db", "rb"), filename=f"fca_backup_{datetime.now().strftime('%Y%m%d')}.db", caption="✅ လက်ရှိ Database အား Backup ထုတ်ယူပြီးပါပြီ။")
     except Exception as e:
-        await update.message.reply_text(f"❌ Backup Error: {str(e)}")
+        await update.message.reply_text(f"Backup Error: {str(e)}")
 
-async def export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await admin_only(update): return
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "FCA Members"
-    ws.append(["Member ID", "Name", "Phone", "Join Date", "Status"])
-    
+async def export_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    filename = "members_export.csv"
     conn = db_connect()
     cur = conn.cursor()
     cur.execute("SELECT member_id, name, phone, join_date, status FROM members")
-    for row in cur.fetchall():
-        ws.append(row)
+    rows = cur.fetchall()
     conn.close()
 
-    file_name = "FCA_Members.xlsx"
-    wb.save(file_name)
-    await update.message.reply_document(document=open(file_name, "rb"), filename=file_name, caption="📊 Excel ဖိုင် ထုတ်ယူပြီးပါပြီ။")
+    with open(filename, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Member ID", "Name", "Phone", "Join Date", "Status"])
+        writer.writerows(rows)
 
-# =====================================================
-# INTENT DETECTOR & KNOWLEDGE SYSTEM (AI)
-# =====================================================
-async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    question = update.message.text
-    # FCA နှင့်မဆိုင်လျှင် ရိုးရိုးပဲပြန်မည်
-    has_keyword = any(word in question.lower() for word in FCA_KEYWORDS)
-    if not has_keyword:
-        await update.message.reply_text("🤖 FCA Assistant\n\nဤမေးခွန်းသည် FCA အဖွဲ့နှင့် မသက်ဆိုင်ပါ။ လစဉ်ကြေး၊ စပေါ်ငွေ၊ စည်းမျဉ်းများကိုသာ ဖြေကြားနိုင်ပါသည်။")
-        return
-
-    q = question.lower()
-    if "လစဉ်" in q or "ကြေး" in q:
-        answer = FCA_RULES["monthly_fee"]
-    elif "deposit" in q or "စပေါ်" in q or "အရေးပေါ်" in q:
-        answer = FCA_RULES["deposit"]
-    elif "သေဆုံး" in q or "ထောက်ပံ့" in q:
-        answer = FCA_RULES["death_support"]
-    elif "မိတ်ဆက်" in q or "referral" in q:
-        answer = FCA_RULES["referral"]
-    else:
-        answer = "🤖 FCA Assistant\n\nမေးခွန်းကို နားမလည်နိုင်သေးပါ။\nဥပမာ- 'လစဉ်ကြေးဘယ်လောက်လဲ' ဟု မေးမြန်းနိုင်ပါသည်။"
-    await update.message.reply_text(answer)
+    await update.message.reply_document(document=open(filename, "rb"), filename=filename, caption="📊 FCA အဖွဲ့ဝင်တစ်ဦးချင်းစီ၏ စာရင်းဇယား Excel/CSV ဖိုင်ထုတ်ယူမှု။")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logging.error(msg="Exception occurred:", exc_info=context.error)
+    logging.error(msg="Exception while handling an update:", exc_info=context.error)
 
 # =====================================================
-# INIT & RUN
+# MAIN APPLICATION RUNNER
 # =====================================================
 def main():
     init_database()
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Generic Commands
+    # Commands Base Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("view", view_profile))
-    app.add_handler(CommandHandler("paymenthistory", payment_history))
     app.add_handler(CommandHandler("eligibility", eligibility))
     app.add_handler(CommandHandler("referral", referral_status))
     app.add_handler(CommandHandler("fundstatus", fund_status))
     
-    # Admin Commands
-    app.add_handler(CommandHandler("pending", pending_payments))
-    app.add_handler(CommandHandler("approve", approve_payment))
-    app.add_handler(CommandHandler("reject", reject_payment))
-    app.add_handler(CommandHandler("fund", add_fund))
-    app.add_handler(CommandHandler("statistics", statistics))
-    app.add_handler(CommandHandler("search", search_member))
+    # Admin Handlers
+    app.add_handler(CommandHandler("search_member", search_member))
+    app.add_handler(CommandHandler("fund_in", fund_in))
+    app.add_handler(CommandHandler("fund_out", fund_out))
     app.add_handler(CommandHandler("backup", backup))
-    app.add_handler(CommandHandler("export", export_excel))
+    app.add_handler(CommandHandler("export", export_members))
 
-    # Registration Flow Handler
+    # Conversation Registration Handler
     register_handler = ConversationHandler(
-        entry_points=[CommandHandler("register", register_start)],
+        entry_points=[CommandHandler("register", register)],
         states={
-            REG_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            REG_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
-            REG_FATHER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_father)],
-            REG_MOTHER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mother)],
-            REG_NRC: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_nrc)],
-            REG_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_address)],
-            REG_JOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_job)],
-            REG_DEPARTMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_department)],
-            REG_PHOTO: [MessageHandler(filters.PHOTO, get_photo)],
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
+            FATHER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_father)],
+            MOTHER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mother)],
+            NRC: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_nrc)],
+            ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_address)],
+            JOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_job)],
+            DEPARTMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_department)],
+            PHOTO: [MessageHandler(filters.PHOTO, get_photo)],
         },
         fallbacks=[]
     )
-
-    # Admin Payment Flow Handler
-    payment_handler = ConversationHandler(
-        entry_points=[CommandHandler("addpayment", add_payment_start)],
-        states={
-            PAY_MEMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, payment_member)],
-            PAY_METHOD: [CallbackQueryHandler(payment_method_callback)],
-            PAY_PROVIDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, payment_provider)],
-            PAY_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, payment_amount)],
-            PAY_MONTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, payment_month)],
-            PAY_PROOF: [MessageHandler(filters.PHOTO, payment_proof)],
-        },
-        fallbacks=[]
-    )
-
     app.add_handler(register_handler)
-    app.add_handler(payment_handler)
+
+    # General Member Messages route to Handbook AI
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ask_ai))
+    
     app.add_error_handler(error_handler)
 
-    print("FCA BOT IS SUCCESSFULLY RUNNING...")
+    print("FCA BOT IS FULLY DEPLOYED & RUNNING...")
     app.run_polling()
 
 if __name__ == "__main__":
